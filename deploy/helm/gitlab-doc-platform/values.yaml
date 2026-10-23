@@ -1,7 +1,7 @@
 namespace: gitlab-docs
 image:
   repository: mcp-gitlab
-  tag: "b17d114489d81f1d821dafa4c8fe10db311b055b"
+  tag: "e4bbdc60099a4cc49a35b5094c59009c7236a806"
   pullPolicy: Always
 
 api:
