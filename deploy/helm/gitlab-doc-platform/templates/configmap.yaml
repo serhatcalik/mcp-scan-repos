@@ -1,0 +1,35 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "gitlab-doc-platform.name" . }}
+data:
+  API_ADDR: {{ printf ":%v" .Values.api.port | quote }}
+  MCP_ADDR: {{ printf ":%v" .Values.mcp.port | quote }}
+  MCP_MANAGEMENT_ADDR: {{ printf ":%v" .Values.mcp.metricsPort | quote }}
+  WORKER_HTTP_ADDR: {{ printf ":%v" .Values.worker.metricsPort | quote }}
+  STORAGE_DIR: {{ .Values.storage.mountPath | quote }}
+  API_REQUESTS_PER_MINUTE: {{ .Values.api.requestsPerMinute | default 120 | quote }}
+  GITLAB_ISSUER: {{ .Values.gitlab.issuer | quote }}
+  GITLAB_OIDC_AUDIENCE: {{ .Values.gitlab.audience | quote }}
+  ALLOWED_GITLAB_GROUPS: {{ .Values.gitlab.allowedGroups | quote }}
+  ALLOWED_GITLAB_PROJECTS: {{ .Values.gitlab.allowedProjects | quote }}
+  REQUIRE_PROTECTED_REF: {{ .Values.gitlab.requireProtectedRef | quote }}
+  GITHUB_ENABLED: {{ .Values.github.enabled | quote }}
+  GITHUB_ISSUER: {{ .Values.github.issuer | quote }}
+  GITHUB_OIDC_AUDIENCE: {{ .Values.github.audience | quote }}
+  GITHUB_JWKS_URL: {{ .Values.github.jwksURL | quote }}
+  ALLOWED_GITHUB_OWNERS: {{ .Values.github.allowedOwners | quote }}
+  ALLOWED_GITHUB_REPOSITORIES: {{ .Values.github.allowedRepositories | quote }}
+  GITHUB_REQUIRE_PROTECTED_REF: {{ .Values.github.requireProtectedRef | quote }}
+  LLM_ENDPOINT: {{ include "gitlab-doc-platform.llmEndpoint" . | quote }}
+  LLM_PROVIDER: {{ .Values.llm.provider | quote }}
+  LLM_MODEL: {{ include "gitlab-doc-platform.llmModel" . | quote }}
+  LLM_CONTEXT_LENGTH: {{ .Values.llm.contextLength | quote }}
+  LLM_TEMPERATURE: {{ .Values.llm.temperature | quote }}
+  LLM_MAX_TOKENS: {{ .Values.llm.maxTokens | default 1800 | quote }}
+  LLM_RETRIES: {{ .Values.llm.retries | quote }}
+  LLM_RETRY_BACKOFF: {{ .Values.llm.retryBackoff | default "2s" | quote }}
+  LLM_MAX_CONCURRENT_REQUESTS: {{ .Values.llm.maxConcurrentRequests | quote }}
+  LLM_MAX_QUEUED_REQUESTS: {{ .Values.llm.maxQueuedRequests | default 16 | quote }}
+  WORKER_JOB_TIMEOUT: {{ .Values.worker.jobTimeout | default "75m" | quote }}
+  LLM_REQUEST_TIMEOUT: {{ .Values.llm.requestTimeout | default "30m" | quote }}

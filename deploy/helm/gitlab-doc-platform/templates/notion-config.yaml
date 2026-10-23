@@ -1,0 +1,8 @@
+{{- if .Values.notion.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "gitlab-doc-platform.name" . }}-notion
+data:
+  targets.json: {{ dict "targets" .Values.notion.targets | toJson | quote }}
+{{- end }}

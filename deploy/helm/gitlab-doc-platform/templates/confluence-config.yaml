@@ -1,0 +1,8 @@
+{{- if .Values.confluence.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "gitlab-doc-platform.name" . }}-confluence
+data:
+  config.json: {{ dict "base_url" .Values.confluence.baseURL "edition" .Values.confluence.edition "username" .Values.confluence.username "mermaid_macro" .Values.confluence.mermaidMacro "mermaid_body_parameter" .Values.confluence.mermaidBodyParameter "mermaid_app" (.Values.confluence.mermaidApp | default "") "mermaid_extension_key" (.Values.confluence.mermaidExtensionKey | default "") "targets" .Values.confluence.targets | toJson | quote }}
+{{- end }}

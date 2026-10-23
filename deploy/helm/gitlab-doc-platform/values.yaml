@@ -1,0 +1,198 @@
+namespace: gitlab-docs
+image:
+  repository: mcp-gitlab
+  tag: "ecf2d7b88efa3c47e26c5a0934fe12eb15288b46"
+  pullPolicy: Always
+
+api:
+  replicas: 1
+  port: 8080
+  requestsPerMinute: 120
+  resources:
+    requests: {cpu: 100m, memory: 128Mi}
+    limits: {cpu: 500m, memory: 512Mi}
+
+mcp:
+  enabled: true
+  replicas: 1
+  port: 8081
+  # Internal health/metrics listener; never route this port publicly.
+  metricsPort: 9091
+  authSecretName: ""
+  authSecretKey: clients.json
+  resources:
+    requests: {cpu: 100m, memory: 128Mi}
+    limits: {cpu: 500m, memory: 512Mi}
+
+worker:
+  replicas: 1
+  jobTimeout: "75m"
+  metricsPort: 9090
+  resources:
+    requests: {cpu: 250m, memory: 256Mi}
+    limits: {cpu: "1", memory: 1Gi}
+
+imagePullSecrets: []
+
+# Grant the publishing account access to the Confluence space and parent page.
+# Tokens belong in an existing Secret, never in values or the ConfigMap.
+confluence:
+  enabled: true
+  # Cloud URLs include /wiki. Use an unscoped account API token with email.
+  baseURL: "https://example.atlassian.net/wiki"
+  edition: cloud
+  username: "example@gmail.com"
+  tokenSecretName: "confluence-integration"
+  tokenSecretKey: token
+  # Set the installed app's storage macro name; empty preserves Mermaid as code.
+  mermaidMacro: ""
+  mermaidBodyParameter: ""
+  # Narva Mermaid uses a Forge ADF extension, not the legacy macro fields above.
+  mermaidApp: narva
+  mermaidExtensionKey: "336440d6-2d95-4275-833f-6351e86634e3/e5743d37-53d6-4daa-a3a1-acca68790e69/static/mermaid-diagram"
+  # mermaidApp: narva
+  # mermaidExtensionKey: "336440d6-2d95-4275-833f-6351e86634e3/e5743d37-53d6-4daa-a3a1-acca68790e69/static/mermaid-diagram"
+  targets:
+  # Cloud example: replace space_id and parent_page_id with real numeric IDs.
+  # targets:
+   - group_id: "144503235" #Example group id
+     space_id: "132842" # Example space id
+     parent_page_id: "655332"
+     enabled: true
+   - group_id: "github:42326541"
+     space_id: "132842"
+     parent_page_id: "655332"
+     enabled: true
+  #     enabled: true
+  #   - group_id: "144502435"
+  #     space_id: "123456789"
+  #     parent_page_id: "987654321"
+  #     enabled: true
+  # Data Center only: set edition: data-center and use space_key, not space_id.
+  # targets:
+  #   - group_id: "11527771"
+  #     space_key: "DOCS"
+  #     parent_page_id: "987654321"
+  #     enabled: true
+
+# Create/share the parent page and grant the Notion connection access separately.
+# Tokens belong in an existing Secret, never in values or the ConfigMap.
+notion:
+  enabled: true
+  tokenSecretName: "notion-token-secret"
+  tokenSecretKey: token
+  targets: 
+   - group_id: "144503235"
+     parent_page_id: "3f733bb824fc80dda127e148997ae73b"
+     enabled: true
+   - group_id: "144503235"
+     parent_page_id: "3f733bb824fc80dda127e148997ae73b"
+     enabled: true
+   - group_id: "github:42326541"
+     parent_page_id: "3f733bb824fc80dda127e148997ae73b"
+     enabled: true
+
+serviceMonitor:
+  enabled: true
+  additionalLabels: {}
+  interval: 30s
+
+gateway:
+  enabled: false
+  name: traefik
+  namespace: ""
+  sectionName: ""
+  apiHostname: ""
+  mcpHostname: ""
+
+networkPolicy:
+  enabled: false
+  ingressNamespaces: [traefik, openshift-ingress]
+  monitoringNamespaces: [monitoring, openshift-monitoring, openshift-user-workload-monitoring]
+  dnsNamespaces: [kube-system, openshift-dns]
+  databaseNamespaceSelector: {}
+  databasePodSelector: {}
+  databasePort: 5432
+  externalDatabaseCIDRs: []
+  httpsCIDRs: ["0.0.0.0/0"]
+  externalOllamaCIDRs: []
+  ollamaPort: 11434
+
+storage:
+  mountPath: /var/lib/gitlab-docs
+  existingClaim: ""
+  size: 10Gi
+  accessModes: ["ReadWriteOnce"]
+  # Required for API/worker to share an RBD filesystem on one node.
+  coLocate: true
+  storageClassName: ""
+  # Leave unset on OKD so its security policy supplies the volume group.
+  fsGroup: null
+
+gitlab:
+  issuer: https://gitlab.com
+  audience: gitlab-doc-platform
+  allowedGroups: "144503235,144503235"
+  allowedProjects: ""
+  requireProtectedRef: false
+
+# GitHub Actions ingestion is opt-in. All allowlist entries are numeric IDs.
+github:
+  enabled: true
+  issuer: https://token.actions.githubusercontent.com
+  audience: gitlab-doc-platform
+  jwksURL: https://token.actions.githubusercontent.com/.well-known/jwks
+  allowedOwners: "42916541"
+  allowedRepositories: "960952030"
+  requireProtectedRef: false
+
+postgres:
+  databaseURLSecretName: cluster-with-metrics-app
+  databaseURLSecretKey: fqdn-uri
+
+llm:
+  # ollama (local, default), openai, or anthropic (Claude).
+  provider: ollama
+  # Required for hosted providers. Reference an existing Secret; never paste keys here.
+  apiKeySecretName: ""
+  apiKeySecretKey: api-key
+  requestTimeout: "30m"
+  # Empty endpoint uses the provider's default; includes /v1 for hosted APIs.
+  endpoint: ""
+  # Empty model defaults to qwen2.5-coder:7b for Ollama only.
+  model: ""
+  contextLength: 8192
+  temperature: 0.1
+  maxTokens: 1800
+  retries: 2
+  retryBackoff: "2s"
+  maxConcurrentRequests: 1
+  maxQueuedRequests: 16
+
+ollama:
+  enabled: true
+  model: qwen2.5-coder:7b
+  replicas: 1
+  # OKD assigns an allowed UID and fsGroup; avoid hardcoding them here.
+  podSecurityContext:
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
+  resources:
+    requests:
+      cpu: "4"
+      memory: 8Gi
+    limits:
+      cpu: "8"
+      memory: 12Gi
+  persistence:
+    enabled: true
+    size: 20Gi
+  environment:
+    HOME: /var/lib/ollama
+    OLLAMA_MODELS: /var/lib/ollama/models
+    OLLAMA_HOST: "0.0.0.0:11434"
+    OLLAMA_NUM_PARALLEL: "1"
+    OLLAMA_MAX_LOADED_MODELS: "1"
+    OLLAMA_CONTEXT_LENGTH: "8192"
+    OLLAMA_KEEP_ALIVE: "30m"

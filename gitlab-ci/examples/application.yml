@@ -1,0 +1,38 @@
+# Example .gitlab-ci.yml for a Go application. Replace the project and API URL.
+include:
+  - project: "platform/gitlab-doc-platform"
+    ref: "main" # Pin a reviewed commit SHA for production use.
+    file: "/gitlab-ci/documentation.yml"
+
+stages:
+  - test
+  - build
+  - documentation
+
+variables:
+  DOCUMENTATION_API_URL: "https://docs-api.example.com"
+  DOCUMENTATION_AUDIENCE: "gitlab-doc-platform"
+  DOCUMENTATION_POLL_SECONDS: "10"
+  DOCUMENTATION_TIMEOUT_SECONDS: "5400"
+
+test_application:
+  stage: test
+  image: golang:1.26.10-alpine3.24
+  script:
+    - go test ./...
+
+build_application:
+  stage: build
+  image: golang:1.26.10-alpine3.24
+  script:
+    - mkdir -p build
+    - go build -o build/ ./cmd/...
+  artifacts:
+    expire_in: 1 day
+    paths:
+      - build/
+
+# Merges these settings into the job provided by the included template.
+generate_documentation:
+  timeout: 100m
+  dependencies: []

@@ -1,0 +1,13 @@
+.git
+.tools
+.agents
+.codex
+.aws
+.env
+.env.*
+node_modules
+build
+dist
+generated-docs
+source-for-documentation.tar.gz
+*.log

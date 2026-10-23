@@ -1,0 +1,11 @@
+# Vanilla Kubernetes does not inject OKD's permitted UID or volume group.
+storage:
+  fsGroup: 65532
+ollama:
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001
+    fsGroup: 10001
+    seccompProfile:
+      type: RuntimeDefault

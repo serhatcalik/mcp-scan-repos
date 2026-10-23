@@ -1,0 +1,12 @@
+# Let restricted SCC assign an allowed UID and volume group.
+storage:
+  fsGroup: null
+ollama:
+  podSecurityContext:
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
+networkPolicy:
+  ingressNamespaces: [openshift-ingress, traefik]
+  dnsNamespaces: [openshift-dns, kube-system]
+  monitoringNamespaces: [openshift-user-workload-monitoring, openshift-monitoring]

@@ -1,0 +1,138 @@
+# Example .github/workflows/application.yml for a Go application.
+# Set the DOCUMENTATION_API_URL Actions variable before running.
+# Use this workflow OR the documentation-only example to avoid duplicate jobs.
+name: Application CI and documentation
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  test_application:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v6 # Pin a reviewed commit SHA for production.
+        with:
+          go-version-file: go.mod
+      - name: Test application
+        run: go test ./...
+
+  build_application:
+    needs: test_application
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v6 # Pin a reviewed commit SHA for production.
+        with:
+          go-version-file: go.mod
+      - name: Build application
+        run: |
+          mkdir -p build
+          go build -o build/ ./cmd/...
+      - name: Save application binaries
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: application-build
+          path: build/
+          retention-days: 1
+
+  documentation:
+    needs: [test_application, build_application]
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      DOCUMENTATION_API_URL: ${{ vars.DOCUMENTATION_API_URL }}
+      DOCUMENTATION_AUDIENCE: ${{ vars.DOCUMENTATION_AUDIENCE || 'gitlab-doc-platform' }}
+      DOCUMENTATION_TIMEOUT_SECONDS: '5400'
+      DOCUMENTATION_POLL_SECONDS: '10'
+      DOCUMENTATION_PROJECT_ID: ${{ github.repository_id }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          persist-credentials: false
+          submodules: false
+          fetch-tags: true
+      - name: Generate documentation
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$DOCUMENTATION_API_URL" || { echo 'Set the DOCUMENTATION_API_URL repository variable'; exit 2; }
+          case "$DOCUMENTATION_API_URL" in https://*) ;; *) echo 'DOCUMENTATION_API_URL must use HTTPS'; exit 2 ;; esac
+          DOCUMENTATION_API_URL=${DOCUMENTATION_API_URL%/}
+          mkdir -p generated-docs
+          archive_dir=$(mktemp -d)
+          trap 'rm -rf -- "$archive_dir"' EXIT
+          # Archive the exact commit from the runner checkout, never execute source.
+          # git archive includes tracked files only and never includes .git credentials.
+          # Archive its tree to omit Git's global PAX commit header, which the
+          # platform's strict extractor rejects as a non-file entry.
+          git archive --format=tar "$GITHUB_SHA^{tree}" > "$archive_dir/source.tar"
+          # Preserve exact-commit release tags in the existing evidence format.
+          if [ -f go.mod ]; then
+            tags=$(git tag --points-at "$GITHUB_SHA" | jq -R -s 'split("\n") | map(select(length > 0))')
+            jq -n --arg project "github:$DOCUMENTATION_PROJECT_ID" --arg commit "$GITHUB_SHA" --argjson tags "$tags" \
+              '{schema_version: 1, project_id: $project, commit_sha: $commit, git_tags: $tags}' \
+              > "$archive_dir/.gitlab-docs-release.json"
+            # Delete any repository-supplied metadata before appending trusted identity.
+            tar --delete -f "$archive_dir/source.tar" .gitlab-docs-release.json 2>/dev/null || true
+            tar -rf "$archive_dir/source.tar" -C "$archive_dir" .gitlab-docs-release.json
+          fi
+          gzip -c "$archive_dir/source.tar" > "$archive_dir/source.tar.gz"
+          request_token() {
+            local audience
+            audience=$(jq -rn --arg value "$DOCUMENTATION_AUDIENCE" '$value | @uri')
+            oidc_token=$(curl --silent --show-error --fail --connect-timeout 15 --max-time 60 \
+              --header "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+              "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=$audience" | jq -er '.value | select(type == "string" and length > 0)')
+            echo "::add-mask::$oidc_token"
+          }
+          api_request() {
+            # Refresh before every request: generation can outlive an OIDC token.
+            request_token
+            curl --silent --show-error --fail-with-body --retry 3 --retry-delay 2 \
+              --connect-timeout 15 --max-time 300 --header "Authorization: Bearer $oidc_token" "$@"
+          }
+          api_request --request POST "$DOCUMENTATION_API_URL/api/v1/github/jobs" \
+            --form "project_id=$DOCUMENTATION_PROJECT_ID" --form "commit_sha=$GITHUB_SHA" \
+            --form 'branch=main' --form "archive=@$archive_dir/source.tar.gz" \
+            --output generated-docs/upload-response.json
+          job_id=$(jq -er '.job_id | select(type == "string" and length > 0)' generated-docs/upload-response.json)
+          deadline=$(( $(date +%s) + DOCUMENTATION_TIMEOUT_SECONDS ))
+          while true; do
+            api_request "$DOCUMENTATION_API_URL/api/v1/github/jobs/$job_id" --output generated-docs/status.json
+            status=$(jq -er '.status' generated-docs/status.json)
+            echo "documentation job $job_id status: $status"
+            case "$status" in
+              completed) break ;;
+              failed|cancelled) cat generated-docs/status.json; exit 4 ;;
+            esac
+            test "$(date +%s)" -lt "$deadline" || { echo 'Timed out waiting for documentation'; exit 5; }
+            sleep "$DOCUMENTATION_POLL_SECONDS"
+          done
+          api_request "$DOCUMENTATION_API_URL/api/v1/github/jobs/$job_id/artifacts" \
+            --output generated-docs/artifacts.tar.gz
+      - name: Save documentation artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: generated-docs
+          path: generated-docs/
+          retention-days: 14

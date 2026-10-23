@@ -1,0 +1,150 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "gitlab-doc-platform.name" . }}-default-deny
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "gitlab-doc-platform.name" . }}-dns
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchExpressions:
+              - key: kubernetes.io/metadata.name
+                operator: In
+                values: {{ .Values.networkPolicy.dnsNamespaces | toJson }}
+      ports: [{protocol: UDP, port: 53}, {protocol: TCP, port: 53}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "gitlab-doc-platform.name" . }}-ingress
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values: [api, mcp, worker]
+  policyTypes: [Ingress]
+  ingress:{{ if and (empty .Values.networkPolicy.monitoringNamespaces) (empty .Values.networkPolicy.ingressNamespaces) }} []{{ end }}
+    {{- if .Values.networkPolicy.monitoringNamespaces }}
+    - from:
+        - namespaceSelector:
+            matchExpressions:
+              - key: kubernetes.io/metadata.name
+                operator: In
+                values: {{ .Values.networkPolicy.monitoringNamespaces | toJson }}
+      ports:
+        - {protocol: TCP, port: {{ .Values.api.port }}}
+        - {protocol: TCP, port: {{ .Values.mcp.metricsPort }}}
+        - {protocol: TCP, port: {{ .Values.worker.metricsPort }}}
+    {{- end }}
+    {{- if .Values.networkPolicy.ingressNamespaces }}
+    - from:
+        - namespaceSelector:
+            matchExpressions:
+              - key: kubernetes.io/metadata.name
+                operator: In
+                values: {{ .Values.networkPolicy.ingressNamespaces | toJson }}
+      ports:
+        - {protocol: TCP, port: {{ .Values.api.port }}}
+        - {protocol: TCP, port: {{ .Values.mcp.port }}}
+    {{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "gitlab-doc-platform.name" . }}-database
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values: [api, mcp, worker]
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector: {{ .Values.networkPolicy.databaseNamespaceSelector | toJson }}
+          podSelector: {{ .Values.networkPolicy.databasePodSelector | toJson }}
+        {{- range .Values.networkPolicy.externalDatabaseCIDRs }}
+        - ipBlock: {cidr: {{ . | quote }}}
+        {{- end }}
+      ports: [{protocol: TCP, port: {{ .Values.networkPolicy.databasePort }}}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "gitlab-doc-platform.name" . }}-https
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values: [api, ollama{{ if ne .Values.llm.provider "ollama" }}, worker{{ end }}]
+  policyTypes: [Egress]
+  egress:{{ if empty .Values.networkPolicy.httpsCIDRs }} []{{ end }}
+    {{- if .Values.networkPolicy.httpsCIDRs }}
+    - to:
+        {{- range .Values.networkPolicy.httpsCIDRs }}
+        - ipBlock: {cidr: {{ . | quote }}}
+        {{- end }}
+      ports: [{protocol: TCP, port: 443}]
+    {{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "gitlab-doc-platform.name" . }}-worker-ollama
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: worker
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: {{ .Release.Name }}
+              app.kubernetes.io/component: ollama
+        {{- range .Values.networkPolicy.externalOllamaCIDRs }}
+        - ipBlock: {cidr: {{ . | quote }}}
+        {{- end }}
+      ports: [{protocol: TCP, port: {{ .Values.networkPolicy.ollamaPort }}}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "gitlab-doc-platform.name" . }}-ollama-ingress
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: ollama
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: {{ .Release.Name }}
+              app.kubernetes.io/component: worker
+      ports: [{protocol: TCP, port: {{ .Values.networkPolicy.ollamaPort }}}]
+{{- end }}

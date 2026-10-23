@@ -1,0 +1,13 @@
+groups:
+  - id: 101
+    name: backend
+    concurrency: 3
+    enabled: true
+  - id: 102
+    name: frontend
+    concurrency: 2
+    enabled: true
+  - id: 103
+    name: infrastructure
+    concurrency: 1
+    enabled: true

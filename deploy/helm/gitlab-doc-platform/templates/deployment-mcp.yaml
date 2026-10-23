@@ -1,0 +1,81 @@
+{{- if .Values.mcp.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "gitlab-doc-platform.name" . }}-mcp
+spec:
+  replicas: {{ .Values.mcp.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: mcp
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+      labels:
+        app.kubernetes.io/component: mcp
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      terminationGracePeriodSeconds: 30
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "gitlab-doc-platform.name" . }}
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: mcp
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["/app/mcp"]
+          envFrom:
+            - configMapRef:
+                name: {{ include "gitlab-doc-platform.name" . }}
+          env:
+            - name: MCP_AUTH_FILE
+              value: /etc/mcp-auth/clients.json
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.postgres.databaseURLSecretName }}
+                  key: {{ .Values.postgres.databaseURLSecretKey }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.mcp.port }}
+            - name: metrics
+              containerPort: {{ .Values.mcp.metricsPort }}
+          resources:
+            {{- toYaml .Values.mcp.resources | nindent 12 }}
+          volumeMounts:
+            - name: auth
+              mountPath: /etc/mcp-auth
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+          startupProbe:
+            httpGet: {path: /healthz, port: metrics}
+            failureThreshold: 30
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: {path: /healthz, port: metrics}
+          readinessProbe:
+            httpGet: {path: /readyz, port: metrics}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: auth
+          secret:
+            secretName: {{ .Values.mcp.authSecretName | default (printf "%s-mcp-auth" (include "gitlab-doc-platform.name" .)) | quote }}
+            items:
+              - key: {{ .Values.mcp.authSecretKey | quote }}
+                path: clients.json
+{{- end }}

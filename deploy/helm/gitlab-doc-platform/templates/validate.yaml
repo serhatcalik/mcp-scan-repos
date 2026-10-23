@@ -1,0 +1,44 @@
+{{- if and (not .Values.storage.coLocate) (not (has "ReadWriteMany" .Values.storage.accessModes)) }}
+{{- fail "Multi-node API/worker scaling requires ReadWriteMany storage; RBD filesystem volumes require storage.coLocate=true" }}
+{{- end }}
+{{- if not (has .Values.llm.provider (list "ollama" "openai" "anthropic")) }}
+{{- fail "llm.provider must be ollama, openai, or anthropic" }}
+{{- end }}
+{{- if ne .Values.llm.provider "ollama" }}
+{{- if or (empty .Values.llm.apiKeySecretName) (empty .Values.llm.apiKeySecretKey) (empty .Values.llm.model) }}
+{{- fail "Hosted LLM providers require llm.model, llm.apiKeySecretName, and llm.apiKeySecretKey" }}
+{{- end }}
+{{- if not (hasPrefix "https://" (include "gitlab-doc-platform.llmEndpoint" .)) }}
+{{- fail "Hosted LLM providers require an HTTPS endpoint" }}
+{{- end }}
+{{- end }}
+{{- if .Values.notion.enabled }}
+{{- if or (empty .Values.notion.tokenSecretName) (empty .Values.notion.tokenSecretKey) (empty .Values.notion.targets) }}
+{{- fail "Notion requires an existing token Secret, token key, and group targets" }}
+{{- end }}
+{{- end }}
+{{- if .Values.confluence.enabled }}
+{{- if or (empty .Values.confluence.tokenSecretName) (empty .Values.confluence.tokenSecretKey) (empty .Values.confluence.baseURL) (empty .Values.confluence.targets) }}
+{{- fail "Confluence requires an HTTPS base URL, an existing token Secret, token key, and group targets" }}
+{{- end }}
+{{- if not (has .Values.confluence.edition (list "cloud" "data-center")) }}
+{{- fail "Confluence edition must be cloud or data-center" }}
+{{- end }}
+{{- if and (eq .Values.confluence.edition "cloud") (empty .Values.confluence.username) }}
+{{- fail "Confluence Cloud requires an account email" }}
+{{- end }}
+{{- end }}
+{{- if and .Values.networkPolicy.enabled (empty .Values.networkPolicy.dnsNamespaces) }}
+{{- fail "networkPolicy.dnsNamespaces must name at least one DNS namespace" }}
+{{- end }}
+{{- if .Values.github.enabled }}
+{{- if and (empty .Values.github.allowedOwners) (empty .Values.github.allowedRepositories) }}
+{{- fail "GitHub requires github.allowedOwners or github.allowedRepositories (numeric IDs)" }}
+{{- end }}
+{{- if or (not (hasPrefix "https://" .Values.github.issuer)) (not (hasPrefix "https://" .Values.github.jwksURL)) (empty .Values.github.audience) }}
+{{- fail "GitHub requires an HTTPS issuer, HTTPS JWKS URL, and audience" }}
+{{- end }}
+{{- end }}
+{{- if ne (int .Values.ollama.replicas) 1 }}
+{{- if .Values.ollama.enabled }}{{- fail "The bundled Ollama StatefulSet requires one replica" }}{{- end }}
+{{- end }}

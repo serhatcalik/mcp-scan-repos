@@ -1,0 +1,84 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "gitlab-doc-platform.name" . }}-api
+spec:
+  replicas: {{ .Values.api.replicas }}
+  {{- if .Values.storage.coLocate }}
+  strategy:
+    type: Recreate
+    rollingUpdate: null
+  {{- end }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: api
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+      labels:
+        app.kubernetes.io/component: api
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      terminationGracePeriodSeconds: 30
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- include "gitlab-doc-platform.storageAffinity" . | nindent 6 }}
+      serviceAccountName: {{ include "gitlab-doc-platform.name" . }}
+      securityContext:
+        runAsNonRoot: true
+        {{- with .Values.storage.fsGroup }}
+        fsGroup: {{ . }}
+        {{- end }}
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: api
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["/app/api"]
+          envFrom:
+            - configMapRef:
+                name: {{ include "gitlab-doc-platform.name" . }}
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.postgres.databaseURLSecretName }}
+                  key: {{ .Values.postgres.databaseURLSecretKey }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: documentation-data
+              mountPath: {{ .Values.storage.mountPath | quote }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.api.port }}
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+          resources:
+            {{- toYaml .Values.api.resources | nindent 12 }}
+          startupProbe:
+            httpGet: {path: /healthz, port: http}
+            failureThreshold: 30
+            periodSeconds: 5
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: documentation-data
+          persistentVolumeClaim:
+            claimName: {{ .Values.storage.existingClaim | default (printf "%s-data" (include "gitlab-doc-platform.name" .)) | quote }}

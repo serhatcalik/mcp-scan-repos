@@ -1,0 +1,145 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "gitlab-doc-platform.name" . }}-worker
+spec:
+  replicas: {{ .Values.worker.replicas }}
+  {{- if .Values.storage.coLocate }}
+  strategy:
+    type: Recreate
+    rollingUpdate: null
+  {{- end }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: worker
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- if .Values.confluence.enabled }}
+        checksum/confluence: {{ include (print $.Template.BasePath "/confluence-config.yaml") . | sha256sum }}
+        {{- end }}
+        {{- if .Values.notion.enabled }}
+        checksum/notion: {{ include (print $.Template.BasePath "/notion-config.yaml") . | sha256sum }}
+        {{- end }}
+      labels:
+        app.kubernetes.io/component: worker
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      terminationGracePeriodSeconds: 30
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- include "gitlab-doc-platform.storageAffinity" . | nindent 6 }}
+      serviceAccountName: {{ include "gitlab-doc-platform.name" . }}
+      securityContext:
+        runAsNonRoot: true
+        {{- with .Values.storage.fsGroup }}
+        fsGroup: {{ . }}
+        {{- end }}
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: worker
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["/app/worker"]
+          envFrom:
+            - configMapRef:
+                name: {{ include "gitlab-doc-platform.name" . }}
+          env:
+            {{- if ne .Values.llm.provider "ollama" }}
+            - name: LLM_API_KEY_FILE
+              value: /etc/llm-secret/api-key
+            {{- end }}
+            - name: CONFLUENCE_ENABLED
+              value: {{ .Values.confluence.enabled | quote }}
+            - name: NOTION_ENABLED
+              value: {{ .Values.notion.enabled | quote }}
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.postgres.databaseURLSecretName }}
+                  key: {{ .Values.postgres.databaseURLSecretKey }}
+          volumeMounts:
+            {{- if ne .Values.llm.provider "ollama" }}
+            - name: llm-secret
+              mountPath: /etc/llm-secret
+              readOnly: true
+            {{- end }}
+            {{- if .Values.confluence.enabled }}
+            - name: confluence-config
+              mountPath: /etc/confluence
+              readOnly: true
+            - name: confluence-secret
+              mountPath: /etc/confluence-secret
+              readOnly: true
+            {{- end }}
+            {{- if .Values.notion.enabled }}
+            - name: notion-config
+              mountPath: /etc/notion
+              readOnly: true
+            - name: notion-secret
+              mountPath: /etc/notion-secret
+              readOnly: true
+            {{- end }}
+            - name: tmp
+              mountPath: /tmp
+            - name: documentation-data
+              mountPath: {{ .Values.storage.mountPath | quote }}
+          resources:
+            {{- toYaml .Values.worker.resources | nindent 12 }}
+          ports:
+            - name: metrics
+              containerPort: {{ .Values.worker.metricsPort }}
+          startupProbe:
+            httpGet: {path: /healthz, port: metrics}
+            failureThreshold: 30
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: {path: /healthz, port: metrics}
+          readinessProbe:
+            httpGet: {path: /readyz, port: metrics}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+      volumes:
+        {{- if ne .Values.llm.provider "ollama" }}
+        - name: llm-secret
+          secret:
+            secretName: {{ .Values.llm.apiKeySecretName | quote }}
+            items:
+              - key: {{ .Values.llm.apiKeySecretKey | quote }}
+                path: api-key
+        {{- end }}
+        {{- if .Values.confluence.enabled }}
+        - name: confluence-config
+          configMap:
+            name: {{ include "gitlab-doc-platform.name" . }}-confluence
+        - name: confluence-secret
+          secret:
+            secretName: {{ .Values.confluence.tokenSecretName | quote }}
+            items:
+              - key: {{ .Values.confluence.tokenSecretKey | quote }}
+                path: token
+        {{- end }}
+        {{- if .Values.notion.enabled }}
+        - name: notion-config
+          configMap:
+            name: {{ include "gitlab-doc-platform.name" . }}-notion
+        - name: notion-secret
+          secret:
+            secretName: {{ .Values.notion.tokenSecretName | quote }}
+            items:
+              - key: {{ .Values.notion.tokenSecretKey | quote }}
+                path: token
+        {{- end }}
+        - name: tmp
+          emptyDir: {}
+        - name: documentation-data
+          persistentVolumeClaim:
+            claimName: {{ .Values.storage.existingClaim | default (printf "%s-data" (include "gitlab-doc-platform.name" .)) | quote }}

@@ -1,0 +1,16 @@
+{{- if not .Values.storage.existingClaim }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "gitlab-doc-platform.name" . }}-data
+spec:
+  volumeMode: Filesystem
+  accessModes:
+    {{- toYaml .Values.storage.accessModes | nindent 4 }}
+  {{- with .Values.storage.storageClassName }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.storage.size }}
+{{- end }}

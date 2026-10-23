@@ -1,0 +1,76 @@
+{{- if .Values.ollama.enabled }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "gitlab-doc-platform.name" . }}-ollama
+spec:
+  serviceName: {{ include "gitlab-doc-platform.name" . }}-ollama
+  replicas: {{ .Values.ollama.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: ollama
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: ollama
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      serviceAccountName: {{ include "gitlab-doc-platform.name" . }}
+      securityContext:
+        {{- toYaml .Values.ollama.podSecurityContext | nindent 8 }}
+      containers:
+        - name: ollama
+          image: ollama/ollama:0.11.10
+          env:
+            {{- range $key, $value := .Values.ollama.environment }}
+            - name: {{ $key }}
+              value: {{ $value | quote }}
+            {{- end }}
+          ports:
+            - name: http
+              containerPort: 11434
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/ollama
+          readinessProbe:
+            httpGet:
+              path: /api/tags
+              port: http
+          livenessProbe:
+            httpGet:
+              path: /api/tags
+              port: http
+          startupProbe:
+            httpGet: {path: /api/tags, port: http}
+            failureThreshold: 60
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.ollama.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: {{ .Values.ollama.persistence.size }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "gitlab-doc-platform.name" . }}-ollama
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/component: ollama
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - name: http
+      port: 11434
+      targetPort: http
+{{- end }}

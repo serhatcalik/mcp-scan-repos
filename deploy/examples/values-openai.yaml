@@ -1,0 +1,11 @@
+# Merge with your cluster profile. Use a model available to your API project.
+llm:
+  provider: openai
+  endpoint: https://api.openai.com/v1
+  model: gpt-4o-mini
+  apiKeySecretName: documentation-openai
+  apiKeySecretKey: api-key
+  requestTimeout: 5m
+
+ollama:
+  enabled: false
