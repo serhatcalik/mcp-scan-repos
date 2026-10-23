@@ -1,0 +1,264 @@
+name: Project CI
+
+on:
+  push:
+    branches: ['**']
+    tags: ['**']
+  pull_request:
+
+permissions: {}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: gitlab_docs_test
+          POSTGRES_USER: gitlab_docs_test
+          POSTGRES_PASSWORD: ci-test-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U gitlab_docs_test -d gitlab_docs_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgres://gitlab_docs_test:ci-test-password@localhost:5432/gitlab_docs_test?sslmode=disable
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Run Go tests with PostgreSQL
+        run: go test ./...
+
+  chart_test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    env:
+      GOBIN: ${{ github.workspace }}/.tools
+      HELM_BIN: ${{ github.workspace }}/.tools/helm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Install Helm
+        run: go install helm.sh/helm/v3/cmd/helm@v3.17.3
+      - name: Lint and test Helm chart
+        run: |
+          .tools/helm lint deploy/helm/gitlab-doc-platform
+          go test ./internal/chart -count=1
+
+  vulnerability_check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Check reachable vulnerabilities
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+
+  build:
+    needs: [test, chart_test, vulnerability_check]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Build services
+        run: go build ./cmd/api ./cmd/worker ./cmd/mcp
+
+  docker_build_and_push:
+    needs: build
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Log in to GitHub Container Registry
+        env:
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          export DOCKER_CONFIG="$RUNNER_TEMP/docker-config"
+          printf 'DOCKER_CONFIG=%s\n' "$DOCKER_CONFIG" >> "$GITHUB_ENV"
+          docker info
+          printf '%s' "$REGISTRY_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+      - name: Build and push image
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          docker build --pull --label "org.opencontainers.image.source=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
+            --tag "$image:$GITHUB_SHA" .
+          docker push "$image:$GITHUB_SHA"
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            # Match GitLab's lowercase, 63-character ref slug convention.
+            ref_slug=$(printf '%s' "$GITHUB_REF_NAME" | LC_ALL=C tr '[:upper:]' '[:lower:]' \
+              | LC_ALL=C sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//' | cut -c1-63 | sed 's/-*$//')
+            test -n "$ref_slug" || { echo 'Git tag produces an empty image tag slug'; exit 2; }
+            docker tag "$image:$GITHUB_SHA" "$image:git-$ref_slug"
+            docker push "$image:git-$ref_slug"
+          fi
+      - name: Log out of GitHub Container Registry
+        if: always()
+        run: docker logout ghcr.io
+
+  update_helm_image_tag:
+    needs: docker_build_and_push
+    if: github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    concurrency:
+      group: helm-image-tag
+      cancel-in-progress: false
+    env:
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      GIT_TERMINAL_PROMPT: '0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          # Only this job may push; checkout removes its temporary credentials on exit.
+          persist-credentials: true
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Update Helm image tag on the current default branch
+        run: |
+          values_file=deploy/helm/gitlab-doc-platform/values.yaml
+          git fetch --no-tags origin "$DEFAULT_BRANCH"
+          if ! git diff --quiet "$GITHUB_SHA" FETCH_HEAD -- . ":(exclude)$values_file"; then
+            echo 'Default-branch source changed; skipping this older image.'
+            exit 0
+          fi
+          git checkout -B "$DEFAULT_BRANCH" FETCH_HEAD
+          go run ./cmd/set-image-tag --values "$values_file" --tag "$GITHUB_SHA"
+          if git diff --quiet -- "$values_file"; then
+            echo 'Helm image tag is already current.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- "$values_file"
+          git commit -m "ci: update Helm image to $GITHUB_SHA [skip ci]"
+          git push origin "HEAD:$DEFAULT_BRANCH"
+
+  documentation:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      DOCUMENTATION_API_URL: ${{ vars.DOCUMENTATION_API_URL }}
+      DOCUMENTATION_AUDIENCE: ${{ vars.DOCUMENTATION_AUDIENCE || 'gitlab-doc-platform' }}
+      DOCUMENTATION_TIMEOUT_SECONDS: '5400'
+      DOCUMENTATION_POLL_SECONDS: '10'
+      DOCUMENTATION_PROJECT_ID: ${{ github.repository_id }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          persist-credentials: false
+          submodules: false
+          fetch-tags: true
+      - name: Generate documentation
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$DOCUMENTATION_API_URL" || { echo 'Set the DOCUMENTATION_API_URL repository variable'; exit 2; }
+          case "$DOCUMENTATION_API_URL" in https://*) ;; *) echo 'DOCUMENTATION_API_URL must use HTTPS'; exit 2 ;; esac
+          DOCUMENTATION_API_URL=${DOCUMENTATION_API_URL%/}
+          mkdir -p generated-docs
+          archive_dir=$(mktemp -d)
+          trap 'rm -rf -- "$archive_dir"' EXIT
+          # Archive the exact commit from the runner checkout, never execute source.
+          # git archive includes tracked files only and never includes .git credentials.
+          # Archive its tree to omit Git's global PAX commit header, which the
+          # platform's strict extractor rejects as a non-file entry.
+          git archive --format=tar "$GITHUB_SHA^{tree}" > "$archive_dir/source.tar"
+          # Preserve exact-commit release tags in the existing evidence format.
+          if [ -f go.mod ]; then
+            tags=$(git tag --points-at "$GITHUB_SHA" | jq -R -s 'split("\n") | map(select(length > 0))')
+            jq -n --arg project "github:$DOCUMENTATION_PROJECT_ID" --arg commit "$GITHUB_SHA" --argjson tags "$tags" \
+              '{schema_version: 1, project_id: $project, commit_sha: $commit, git_tags: $tags}' \
+              > "$archive_dir/.gitlab-docs-release.json"
+            # Delete any repository-supplied metadata before appending trusted identity.
+            tar --delete -f "$archive_dir/source.tar" .gitlab-docs-release.json 2>/dev/null || true
+            tar -rf "$archive_dir/source.tar" -C "$archive_dir" .gitlab-docs-release.json
+          fi
+          gzip -c "$archive_dir/source.tar" > "$archive_dir/source.tar.gz"
+          request_token() {
+            local audience
+            audience=$(jq -rn --arg value "$DOCUMENTATION_AUDIENCE" '$value | @uri')
+            oidc_token=$(curl --silent --show-error --fail --connect-timeout 15 --max-time 60 \
+              --header "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+              "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=$audience" | jq -er '.value | select(type == "string" and length > 0)')
+            echo "::add-mask::$oidc_token"
+          }
+          api_request() {
+            # Refresh before every request: generation can outlive an OIDC token.
+            request_token
+            curl --silent --show-error --fail-with-body --retry 3 --retry-delay 2 \
+              --connect-timeout 15 --max-time 300 --header "Authorization: Bearer $oidc_token" "$@"
+          }
+          api_request --request POST "$DOCUMENTATION_API_URL/api/v1/github/jobs" \
+            --form "project_id=$DOCUMENTATION_PROJECT_ID" --form "commit_sha=$GITHUB_SHA" \
+            --form 'branch=main' --form "archive=@$archive_dir/source.tar.gz" \
+            --output generated-docs/upload-response.json
+          job_id=$(jq -er '.job_id | select(type == "string" and length > 0)' generated-docs/upload-response.json)
+          deadline=$(( $(date +%s) + DOCUMENTATION_TIMEOUT_SECONDS ))
+          while true; do
+            api_request "$DOCUMENTATION_API_URL/api/v1/github/jobs/$job_id" --output generated-docs/status.json
+            status=$(jq -er '.status' generated-docs/status.json)
+            echo "documentation job $job_id status: $status"
+            case "$status" in
+              completed) break ;;
+              failed|cancelled) cat generated-docs/status.json; exit 4 ;;
+            esac
+            test "$(date +%s)" -lt "$deadline" || { echo 'Timed out waiting for documentation'; exit 5; }
+            sleep "$DOCUMENTATION_POLL_SECONDS"
+          done
+          api_request "$DOCUMENTATION_API_URL/api/v1/github/jobs/$job_id/artifacts" \
+            --output generated-docs/artifacts.tar.gz
+      - name: Save documentation artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: generated-docs
+          path: generated-docs/
+          retention-days: 14

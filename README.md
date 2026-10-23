@@ -46,6 +46,8 @@ Application repositories include [gitlab-ci/documentation.yml](gitlab-ci/documen
 
 ## GitHub Actions
 
+This project's [`.github/workflows/ci.yml`](.github/workflows/ci.yml) mirrors the GitLab test, build, image-publish, and Helm tag-update stages using GitHub Container Registry. See [project GitHub CI setup](docs/project-github-ci.md) for token permissions, image tags, and branch protection requirements.
+
 GitHub ingestion is opt-in and can run alongside GitLab. Enable it with numeric owner/repository ID allowlists, then copy [github-actions/documentation.yml](github-actions/documentation.yml) into an application's `.github/workflows/` directory. The workflow uploads the exact `main` commit to `/api/v1/github/jobs`, refreshes OIDC tokens while polling, and saves generated artifacts. See [GitHub setup](docs/github-actions.md) for Helm settings, API routes, and identity scopes.
 
 A complete Go application example with test, build, and documentation jobs is available in [github-actions/examples/application.yml](github-actions/examples/application.yml). Copy it to `.github/workflows/application.yml` and set the `DOCUMENTATION_API_URL` Actions variable.
